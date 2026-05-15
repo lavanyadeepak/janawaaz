@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jan Awaaz — Public Grievance Portal</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Source+Sans+3:wght@300;400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --saffron: #E8611A;
+    --saffron-light: #FDF0E8;
+    --saffron-dark: #B44D12;
+    --navy: #1A2744;
+    --navy-mid: #2D3E6B;
+    --green: #1A6B3A;
+    --green-light: #EAF4EE;
+    --gold: #C8971A;
+    --gold-light: #FDF8E8;
+    --bg: #F8F5F0;
+    --white: #FFFFFF;
+    --text: #1A1A1A;
+    --text-muted: #5A5A5A;
+    --border: #DDD8CF;
+    --radius: 10px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Source Sans 3', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  .hero {
+    background: linear-gradient(135deg, var(--navy) 0%, var(--navy-mid) 60%, #1A3A6B 100%);
+    color: white;
+    padding: 2.5rem 2rem 3rem;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 5px;
+    background: linear-gradient(90deg, var(--saffron) 33.3%, white 33.3%, white 66.6%, var(--green) 66.6%);
+  }
+
+  .hero::after {
+    content: '⚖';
+    position: absolute;
+    right: 2rem;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 6rem;
+    opacity: 0.05;
+  }
+
+  .hero-badge {
+    display: inline-block;
+    background: rgba(232, 97, 26, 0.2);
+    border: 1px solid rgba(232, 97, 26, 0.5);
+    color: #FFAA70;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 4px 14px;
+    border-radius: 20px;
+    margin-bottom: 1rem;
+  }
+
+  .hero h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: 2.4rem;
+    font-weight: 700;
+    margin-bottom: 0.4rem;
+    letter-spacing: -0.5px;
+  }
+
+  .hero h1 span { color: #FFAA70; }
+
+  .hero-tagline {
+    font-size: 1rem;
+    opacity: 0.75;
+    font-weight: 300;
+    margin-bottom: 0.3rem;
+  }
+
+  .hero-hindi {
+    font-size: 0.9rem;
+    opacity: 0.5;
+    font-style: italic;
+  }
+
+  .main { max-width: 820px; margin: 0 auto; padding: 2.5rem 1.5rem 4rem; }
+
+  .info-banner {
+    background: var(--gold-light);
+    border-left: 4px solid var(--gold);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 1rem 1.25rem;
+    margin-bottom: 2rem;
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+  }
+
+  .info-banner .icon { font-size: 1.2rem; flex-shrink: 0; margin-top: 1px; }
+
+  .info-banner p { font-size: 0.9rem; color: #7A5A10; line-height: 1.5; }
+
+  .info-banner strong { color: var(--gold); }
+
+  .card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 2rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+  }
+
+  .card-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--navy);
+    margin-bottom: 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .card-title .step {
+    width: 26px; height: 26px;
+    background: var(--saffron);
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 0.8rem;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+  @media(max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
+
+  .form-group { display: flex; flex-direction: column; gap: 0.4rem; }
+  .form-group.full { grid-column: 1 / -1; }
+
+  label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  select, input[type="text"], textarea, input[type="file"] {
+    width: 100%;
+    padding: 0.65rem 0.9rem;
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 0.95rem;
+    color: var(--text);
+    background: var(--white);
+    transition: border-color 0.2s, box-shadow 0.2s;
+    appearance: auto;
+  }
+
+  select:focus, input:focus, textarea:focus {
+    outline: none;
+    border-color: var(--saffron);
+    box-shadow: 0 0 0 3px rgba(232,97,26,0.1);
+  }
+
+  select[multiple] {
+    height: 140px;
+    padding: 0.4rem;
+  }
+
+  select[multiple] option {
+    padding: 0.3rem 0.5rem;
+    border-radius: 4px;
+    margin: 1px 0;
+  }
+
+  select[multiple] option:checked {
+    background: var(--saffron-light);
+    color: var(--saffron-dark);
+  }
+
+  textarea { height: 160px; resize: vertical; line-height: 1.6; }
+
+  .helper { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }
+
+  input[type="file"] {
+    padding: 0.5rem;
+    cursor: pointer;
+    background: var(--bg);
+    font-size: 0.85rem;
+  }
+
+  .dept-suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  .dept-chip {
+    background: var(--saffron-light);
+    border: 1px solid rgba(232,97,26,0.25);
+    color: var(--saffron-dark);
+    font-size: 0.75rem;
+    padding: 3px 10px;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-weight: 600;
+  }
+
+  .dept-chip:hover {
+    background: var(--saffron);
+    color: white;
+    border-color: var(--saffron);
+  }
+
+  .generate-btn {
+    width: 100%;
+    padding: 1rem;
+    background: linear-gradient(135deg, var(--saffron) 0%, var(--saffron-dark) 100%);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-family: 'Playfair Display', serif;
+    font-size: 1.15rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    letter-spacing: 0.3px;
+  }
+
+  .generate-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(232,97,26,0.35); }
+  .generate-btn:active { transform: translateY(0); }
+  .generate-btn:disabled { opacity: 0.65; cursor: not-allowed; transform: none; box-shadow: none; }
+
+  .output-section { display: none; margin-top: 2rem; }
+  .output-section.visible { display: block; }
+
+  .output-tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 0;
+    border-bottom: 2px solid var(--border);
+  }
+
+  .tab-btn {
+    padding: 0.65rem 1.5rem;
+    background: transparent;
+    border: none;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .tab-btn.active {
+    color: var(--saffron);
+    border-bottom-color: var(--saffron);
+  }
+
+  .tab-btn:hover:not(.active) { color: var(--navy); }
+
+  .tab-panel { display: none; padding: 1.5rem 0 0; }
+  .tab-panel.active { display: block; }
+
+  .letter-output {
+    background: #FDFCFA;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 2rem;
+    font-size: 0.95rem;
+    line-height: 1.8;
+    color: var(--text);
+    white-space: pre-wrap;
+    min-height: 200px;
+    position: relative;
+  }
+
+  .letter-output.loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 200px;
+  }
+
+  .spinner {
+    width: 36px; height: 36px;
+    border: 3px solid var(--border);
+    border-top-color: var(--saffron);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .copy-btn {
+    margin-top: 0.75rem;
+    background: var(--navy);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 0.55rem 1.2rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .copy-btn:hover { background: var(--navy-mid); }
+
+  .lang-tag {
+    display: inline-block;
+    background: var(--green-light);
+    color: var(--green);
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 12px;
+    margin-bottom: 0.75rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    border: 1px solid rgba(26,107,58,0.2);
+  }
+
+  .error-msg {
+    background: #FFF0F0;
+    border: 1px solid #FFCCCC;
+    color: #AA2222;
+    padding: 1rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+  }
+
+  .char-count {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-align: right;
+    margin-top: 3px;
+  }
+
+  .satyameva {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    margin-top: 2.5rem;
+    opacity: 0.6;
+    font-style: italic;
+    letter-spacing: 0.05em;
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-badge">Citizen Empowerment Portal</div>
+  <h1>Jan <span>Awaaz</span></h1>
+  <p class="hero-tagline">Your Voice. Your Rights. In Your Language.</p>
+  <p class="hero-hindi">जन आवाज़ — आपकी भाषा में आपका अधिकार</p>
+</div>
+
+<div class="main">
+
+  <div class="info-banner">
+    <span class="icon">ℹ️</span>
+    <p>Your complaint will be <strong>AI-formatted into a formal petition letter</strong> in your selected regional language <strong>and</strong> Hindi — because many state departments operate best in their native tongue, not English.</p>
+  </div>
+
+  <!-- CARD 1: Location & Language -->
+  <div class="card">
+    <div class="card-title"><span class="step">1</span> Location & Language</div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label for="state">State / Union Territory</label>
+        <select id="state" required>
+          <option value="">— Select State —</option>
+          <option>Andhra Pradesh</option>
+          <option>Arunachal Pradesh</option>
+          <option>Assam</option>
+          <option>Bihar</option>
+          <option>Chandigarh</option>
+          <option>Chhattisgarh</option>
+          <option>Dadra & Nagar Haveli and Daman & Diu</option>
+          <option>Delhi (NCT)</option>
+          <option>Goa</option>
+          <option>Gujarat</option>
+          <option>Haryana</option>
+          <option>Himachal Pradesh</option>
+          <option>Jammu & Kashmir</option>
+          <option>Jharkhand</option>
+          <option>Karnataka</option>
+          <option>Kerala</option>
+          <option>Ladakh</option>
+          <option>Lakshadweep</option>
+          <option>Madhya Pradesh</option>
+          <option>Maharashtra</option>
+          <option>Manipur</option>
+          <option>Meghalaya</option>
+          <option>Mizoram</option>
+          <option>Nagaland</option>
+          <option>Odisha</option>
+          <option>Puducherry</option>
+          <option>Punjab</option>
+          <option>Rajasthan</option>
+          <option>Sikkim</option>
+          <option selected>Tamil Nadu</option>
+          <option>Telangana</option>
+          <option>Tripura</option>
+          <option>Uttar Pradesh</option>
+          <option>Uttarakhand</option>
+          <option>West Bengal</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="languages">Output Language(s)</label>
+        <select id="languages" multiple required>
+          <option value="Tamil" selected>Tamil — தமிழ்</option>
+          <option value="Hindi">Hindi — हिंदी</option>
+          <option value="English">English</option>
+          <option value="Telugu">Telugu — తెలుగు</option>
+          <option value="Kannada">Kannada — ಕನ್ನಡ</option>
+          <option value="Malayalam">Malayalam — മലയാളം</option>
+          <option value="Marathi">Marathi — मराठी</option>
+          <option value="Bengali">Bengali — বাংলা</option>
+          <option value="Gujarati">Gujarati — ગુજરાતી</option>
+          <option value="Punjabi">Punjabi — ਪੰਜਾਬੀ</option>
+          <option value="Odia">Odia — ଓଡ଼ିଆ</option>
+          <option value="Assamese">Assamese — অসমীয়া</option>
+          <option value="Urdu">Urdu — اردو</option>
+          <option value="Konkani">Konkani — कोंकणी</option>
+          <option value="Manipuri">Manipuri — মৈতৈলোন্</option>
+          <option value="Nepali">Nepali — नेपाली</option>
+          <option value="Sanskrit">Sanskrit — संस्कृतम्</option>
+          <option value="Sindhi">Sindhi — سنڌي</option>
+          <option value="Bodo">Bodo — बड़ो</option>
+          <option value="Dogri">Dogri — डोगरी</option>
+          <option value="Kashmiri">Kashmiri — كشميري</option>
+          <option value="Maithili">Maithili — मैथिली</option>
+          <option value="Santali">Santali — ᱥᱟᱱᱛᱟᱲᱤ</option>
+          <option value="Sinhala">Sinhala — සිංහල</option>
+        </select>
+        <p class="helper">Hold Ctrl / Cmd to select multiple. Hindi is always included.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- CARD 2: Department & Details -->
+  <div class="card">
+    <div class="card-title"><span class="step">2</span> Department & Complaint</div>
+    <div class="form-grid">
+      <div class="form-group full">
+        <label for="department">Government Department</label>
+        <input type="text" id="department" placeholder="e.g. Tamil Nadu Municipal Corporation, PWD, Revenue Department" required>
+        <div class="dept-suggestions">
+          <span class="dept-chip" onclick="setDept('Municipal Corporation')">Municipal Corporation</span>
+          <span class="dept-chip" onclick="setDept('Revenue Department')">Revenue Department</span>
+          <span class="dept-chip" onclick="setDept('Public Works Department (PWD)')">PWD</span>
+          <span class="dept-chip" onclick="setDept('Electricity Board (TANGEDCO)')">Electricity Board</span>
+          <span class="dept-chip" onclick="setDept('Water Supply & Drainage Board')">Water & Drainage</span>
+          <span class="dept-chip" onclick="setDept('Police Department')">Police</span>
+          <span class="dept-chip" onclick="setDept('Transport Department')">Transport</span>
+          <span class="dept-chip" onclick="setDept('Health Department')">Health</span>
+          <span class="dept-chip" onclick="setDept('Education Department')">Education</span>
+          <span class="dept-chip" onclick="setDept('Ration / PDS Office')">Ration / PDS</span>
+        </div>
+      </div>
+
+      <div class="form-group full">
+        <label for="petitioner">Your Name & Address (for petition header)</label>
+        <input type="text" id="petitioner" placeholder="e.g. Rajan S, Door No. 4, Gandhi Nagar, Chennai - 600040">
+      </div>
+
+      <div class="form-group full">
+        <label for="complaint">Complaint Details</label>
+        <textarea id="complaint" placeholder="Describe your issue clearly — what happened, when, where, who is affected, what you have tried so far..." required oninput="updateCount()"></textarea>
+        <div class="char-count" id="charCount">0 characters</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CARD 3: Attachments -->
+  <div class="card">
+    <div class="card-title"><span class="step">3</span> Supporting Documents</div>
+    <div class="form-group">
+      <label for="attachment">Upload Evidence (PDF / JPG / PNG)</label>
+      <input type="file" id="attachment" accept=".pdf,.jpg,.jpeg,.png" multiple>
+      <p class="helper">Photos, receipts, previous complaint acknowledgements, maps — anything that strengthens your case. Max 5MB each.</p>
+    </div>
+  </div>
+
+  <button class="generate-btn" id="generateBtn" onclick="generatePetition()">
+    ✍️ Generate Petition Letter
+  </button>
+
+  <!-- OUTPUT SECTION -->
+  <div class="output-section" id="outputSection">
+    <div class="card" style="padding: 1.5rem;">
+      <div class="card-title" style="margin-bottom: 1rem;">📄 Your Petition Letters</div>
+      <div class="output-tabs" id="outputTabs"></div>
+      <div id="outputPanels"></div>
+    </div>
+  </div>
+
+  <p class="satyameva">सत्यमेव जयते — Truth Alone Triumphs</p>
+
+</div>
+
+<script>
+function setDept(val) {
+  document.getElementById('department').value = val;
+}
+
+function updateCount() {
+  const len = document.getElementById('complaint').value.length;
+  document.getElementById('charCount').textContent = len + ' characters';
+}
+
+function getSelectedLanguages() {
+  const sel = document.getElementById('languages');
+  const langs = Array.from(sel.selectedOptions).map(o => o.value);
+  if (!langs.includes('Hindi')) langs.push('Hindi');
+  return [...new Set(langs)];
+}
+
+async function generatePetition() {
+  const state = document.getElementById('state').value;
+  const dept = document.getElementById('department').value.trim();
+  const complaint = document.getElementById('complaint').value.trim();
+  const petitioner = document.getElementById('petitioner').value.trim();
+  const languages = getSelectedLanguages();
+
+  if (!state || !dept || !complaint) {
+    alert('Please fill in State, Department, and Complaint details.');
+    return;
+  }
+
+  const btn = document.getElementById('generateBtn');
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Generating...';
+
+  const outputSection = document.getElementById('outputSection');
+  const outputTabs = document.getElementById('outputTabs');
+  const outputPanels = document.getElementById('outputPanels');
+
+  outputSection.classList.add('visible');
+  outputTabs.innerHTML = '';
+  outputPanels.innerHTML = '';
+
+  languages.forEach((lang, i) => {
+    const tab = document.createElement('button');
+    tab.className = 'tab-btn' + (i === 0 ? ' active' : '');
+    tab.textContent = lang;
+    tab.onclick = () => switchTab(i);
+    outputTabs.appendChild(tab);
+
+    const panel = document.createElement('div');
+    panel.className = 'tab-panel' + (i === 0 ? ' active' : '');
+    panel.id = 'panel-' + i;
+    panel.innerHTML = `<div class="lang-tag">${lang}</div><div class="letter-output loading" id="letter-${i}"><div class="spinner"></div></div>`;
+    outputPanels.appendChild(panel);
+  });
+
+  outputSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  try {
+    const data = await fetchAllLetters(state, dept, complaint, petitioner, languages);
+    data.letters.forEach(({ language, letter, error }) => {
+      const i = languages.indexOf(language);
+      if (i === -1) return;
+      const letterEl = document.getElementById('letter-' + i);
+      letterEl.classList.remove('loading');
+      letterEl.innerHTML = '';
+      const textToShow = error ? `[${language} translation failed] ${error}\n\n${letter || ''}` : (letter || '');
+      if ('value' in letterEl) letterEl.value = textToShow;
+      else letterEl.textContent = textToShow;
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'copy-btn';
+      copyBtn.innerHTML = '📋 Copy ' + language + ' Letter';
+      copyBtn.onclick = () => {
+        navigator.clipboard.writeText(letter || '');
+        copyBtn.innerHTML = '✅ Copied!';
+        setTimeout(() => { copyBtn.innerHTML = '📋 Copy ' + language + ' Letter'; }, 2000);
+      };
+      letterEl.parentElement.appendChild(copyBtn);
+    });
+
+    // Add Download PDF Button
+    const downloadBtn = document.createElement('button');
+    downloadBtn.className = 'generate-btn';
+    downloadBtn.style.marginTop = '20px';
+    downloadBtn.innerHTML = '📥 Download Official PDF Booklet';
+    downloadBtn.onclick = () => downloadPDF(state, dept, complaint, petitioner, languages);
+    outputPanels.appendChild(downloadBtn);
+
+  } catch (err) {
+    languages.forEach((_, i) => {
+      const letterEl = document.getElementById('letter-' + i);
+      if (letterEl) {
+        letterEl.classList.remove('loading');
+        letterEl.innerHTML = '<div class="error-msg">⚠️ Generation failed: ' + err.message + '</div>';
+      }
+    });
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '✍️ Generate Petition Letter';
+}
+
+function switchTab(idx) {
+  document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
+  document.querySelectorAll('.tab-panel').forEach((p, i) => p.classList.toggle('active', i === idx));
+}
+
+async function downloadPDF(state, dept, complaint, petitioner, languages) {
+  const formData = new FormData();
+  formData.append('state', state);
+  formData.append('department', dept);
+  formData.append('complaint', complaint);
+  formData.append('petitioner', petitioner);
+  languages.forEach(lang => formData.append('languages[]', lang));
+  
+  const fileInput = document.getElementById('attachment');
+  if (fileInput.files.length > 0) formData.append('attachment', fileInput.files[0]);
+
+  const response = await fetch('/api/generate-petition?format=pdf', {
+    method: 'POST',
+    body: formData
+  });
+
+  if (response.ok) {
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Petition_${new Date().getTime()}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+}
+
+async function generateForLanguage(idx, language, state, dept, complaint, petitioner) {
+  // No-op: all languages are fetched in one batch call from generatePetition()
+}
+
+async function fetchAllLetters(state, dept, complaint, petitioner, languages) {
+  const formData = new FormData();
+  formData.append('state', state);
+  formData.append('department', dept);
+  formData.append('complaint', complaint);
+  formData.append('petitioner', petitioner);
+  
+  languages.forEach(lang => formData.append('languages[]', lang));
+
+  const fileInput = document.getElementById('attachment');
+  if (fileInput.files.length > 0) {
+    formData.append('attachment', fileInput.files[0]);
+  }
+
+  const response = await fetch('/api/generate-petition', {
+    method: 'POST',
+    body: formData
+  });
+
+  if (!response.ok) {
+    const errData = await response.json();
+    throw new Error(errData.error || 'Failed to generate petition');
+  }
+
+  return await response.json();
+}
+</script>
+</body>
+</html>
