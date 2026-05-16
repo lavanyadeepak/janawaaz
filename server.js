@@ -3,8 +3,8 @@ const express = require('express');
 const multer  = require('multer');
 const cors    = require('cors');
 const path    = require('path');
-const PDFDocument = require('pdfkit');
 const fs = require('fs');
+const puppeteer = require('puppeteer');
 
 const app    = express();
 const upload = multer({ limits: { fileSize: 5 * 1024 * 1024 } }); // 5 MB
@@ -15,6 +15,14 @@ const LANGUAGES_TIMEOUT_MS = Number(process.env.LANGUAGES_TIMEOUT_MS || 7000);
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, ''))); // serves index.html
+
+// Log unexpected crashes so PDF-generation issues don't fail silently.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err && err.stack ? err.stack : err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection]', err && err.stack ? err.stack : err);
+});
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
   const controller = new AbortController();
@@ -201,213 +209,231 @@ function sanitizeText(text) {
     .trim();
 }
 
-// ── PDF Booklet ───────────────────────────────────────────────────────────────
+// ── PDF Booklet (Chromium/Puppeteer) ─────────────────────────────────────────
+// Uses Chromium shaping/rendering (more reliable for Devanagari/Indic scripts).
 async function generatePDFBooklet(res, { englishLetter, results, docketNo, attachment }) {
-  const doc = new PDFDocument({ margin: 50, size: 'A4', autoFirstPage: false });
+  const fontsDir = path.join(__dirname, 'fonts');
 
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename=Petition_${docketNo}.pdf`);
-  doc.pipe(res);
+  const escapeHtml = (s) =>
+    String(s ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\"/g, '&quot;')
+      .replace(/'/g, '&#039;');
 
-  // Pre-register all Indic fonts before writing any page content
-  const fontRegistry = buildFontRegistry(doc);
-
-  const useFontForLanguage = (language) => {
-    if (language === 'English') { doc.font('Helvetica'); return; }
-    const fontName = fontRegistry[language];
-    if (fontName) { doc.font(fontName); return; }
-    doc.font('Helvetica'); // last resort
+  const toDataUrl = (absPath) => {
+    const buf = fs.readFileSync(absPath);
+    const b64 = buf.toString('base64');
+    const ext = path.extname(absPath).toLowerCase();
+    const mime =
+      ext === '.otf' ? 'font/otf' :
+      ext === '.ttc' ? 'font/collection' :
+      'font/ttf';
+    return `data:${mime};base64,${b64}`;
   };
 
-  // ── PAGE 1: COVER / INTRODUCTION ──────────────────────────────────────────
-  doc.addPage();
+  const langToFontFile = (language) => {
+    if (FONT_BY_LANGUAGE[language]) return FONT_BY_LANGUAGE[language];
+    return 'NotoSansDevanagari-Regular.ttf';
+  };
 
-  // Header banner
-  doc.rect(0, 0, doc.page.width, 80).fill('#1a3a5c');
-  doc.fillColor('#ffffff')
-    .fontSize(26).font('Helvetica-Bold')
-    .text('JAN AWAAZ', 50, 22, { align: 'center' });
-  doc.fontSize(13).font('Helvetica')
-    .text('जन आवाज़  |  The People\'s Voice', 50, 52, { align: 'center' });
+  const wantedLanguages = [...new Set((results || []).map(r => r.language).filter(Boolean))];
+  const uniqueFontFiles = new Set();
+  for (const lang of wantedLanguages) uniqueFontFiles.add(langToFontFile(lang));
 
-  doc.fillColor('#1a3a5c').fontSize(11).font('Helvetica-Bold')
-    .text(`Docket No: ${docketNo}`, 50, 100);
+  const embeddedFonts = [];
+  for (const fileName of uniqueFontFiles) {
+    const absPath = path.join(fontsDir, fileName);
+    if (!fs.existsSync(absPath)) continue;
+    embeddedFonts.push({ fileName, dataUrl: toDataUrl(absPath) });
+  }
 
-  doc.moveDown(2);
-  doc.font('Helvetica').fontSize(11).fillColor('#222222').lineGap(4)
-    .text('This document contains the original petition and supporting materials submitted for grievance redressal.', { align: 'justify' });
-  doc.moveDown();
-  doc.text('The original petition is the authentic version drafted by the complainant.', { align: 'justify' });
-  doc.moveDown();
-  doc.text('Machine-generated translations are provided for administrative convenience in regional and Hindi languages.', { align: 'justify' });
-  doc.moveDown();
-  doc.text('Annexures include any supporting documents attached by the complainant.', { align: 'justify' });
+  if (embeddedFonts.length > 0) {
+    console.log('[PDF fonts] Embedded (HTML): ' + embeddedFonts.map(f => f.fileName).join(', '));
+  } else {
+    console.warn(`[PDF fonts] No font files found in ${fontsDir}. PDFs may not render Indic scripts correctly.`);
+  }
 
-  // Disclaimer box — no hyperlink, no underline, plain styled box
-  doc.moveDown(2);
-  const disclaimerTop = doc.y;
-  doc.rect(50, disclaimerTop, doc.page.width - 100, 80).fill('#fff3cd').stroke('#e6ac00');
-  doc.fillColor('#7d4e00').fontSize(11).font('Helvetica-Bold')
-    .text('Disclaimer', 62, disclaimerTop + 10, { underline: false });
-  doc.font('Helvetica').fillColor('#5a3800').fontSize(10)
-    .text(
-      'Translations are machine-generated. Accuracy is not guaranteed. They must always be read in tandem with the original petition. Only the citizen\'s original draft is legally binding.',
-      62, disclaimerTop + 28,
-      { width: doc.page.width - 124, align: 'justify' }
-    );
+  const fontFaceCss = embeddedFonts
+    .map((f) => {
+      const family = `F_${f.fileName.replace(/[^a-zA-Z0-9]+/g, '_')}`;
+      // Use truetype for .ttf/.ttc for Chromium; it will still load most .ttc as TrueType Collections.
+      return `@font-face{font-family:'${family}';src:url('${f.dataUrl}') format('truetype');font-weight:400;font-style:normal;}`;
+    })
+    .join('\n');
 
-  // ── PAGE 2: TABLE OF CONTENTS ─────────────────────────────────────────────
-  doc.addPage();
+  const langFontFamily = (language) => {
+    const fileName = langToFontFile(language);
+    const family = `F_${fileName.replace(/[^a-zA-Z0-9]+/g, '_')}`;
+    return embeddedFonts.some(f => f.fileName === fileName)
+      ? `'${family}', sans-serif`
+      : `sans-serif`;
+  };
 
-  doc.rect(0, 0, doc.page.width, 60).fill('#1a3a5c');
-  doc.fillColor('#ffffff').fontSize(18).font('Helvetica-Bold')
-    .text('Table of Contents', 50, 18, { align: 'center' });
+  let attachmentHtml = '';
+  if (attachment) {
+    if (attachment.mimetype && attachment.mimetype.startsWith('image/')) {
+      const imageB64 = attachment.buffer.toString('base64');
+      const imageSrc = `data:${attachment.mimetype};base64,${imageB64}`;
+      attachmentHtml = `
+        <div class="page">
+          <div class="header annex">Annexures and Exhibits</div>
+          <div class="content">
+            <div class="muted">Attached image: ${escapeHtml(attachment.originalname || '')}</div>
+            <div class="annex-image-wrap">
+              <img class="annex-image" src="${imageSrc}" />
+            </div>
+          </div>
+        </div>
+      `;
+    } else {
+      attachmentHtml = `
+        <div class="page">
+          <div class="header annex">Annexures and Exhibits</div>
+          <div class="content">
+            <div class="muted">Attached file: ${escapeHtml(attachment.originalname || '')} (${escapeHtml(attachment.mimetype || 'unknown')})</div>
+            <div class="muted">Note: PDF merging is not enabled in this local build.</div>
+          </div>
+        </div>
+      `;
+    }
+  }
 
-  doc.fillColor('#222222').fontSize(12).font('Helvetica');
-  doc.moveDown(2.5);
+  const translationsHtml = (results || [])
+    .filter(r => r.language && r.language !== 'English')
+    .map((r) => {
+      const lang = r.language;
+      const family = langFontFamily(lang);
+      const body = r.error
+        ? `<div class="error">Translation unavailable: ${escapeHtml(r.error)}</div>
+           <div class="muted">Refer to the English original.</div>`
+        : `<div class="letter" style="font-family:${family}">${escapeHtml(r.letter || '').replace(/\n/g, '<br/>')}</div>`;
+      return `
+        <div class="page">
+          <div class="header green">${escapeHtml(lang)} Translation</div>
+          <div class="notice">MACHINE GENERATED TRANSLATION — FOR REFERENCE ONLY</div>
+          <div class="content">
+            ${body}
+          </div>
+          <div class="footer">Note: Refer to the English version for legal accuracy.</div>
+        </div>
+      `;
+    })
+    .join('\n');
 
   const tocItems = [
-    { label: 'Original Petition (English)', page: 3 },
+    { label: 'Original Petition (English)' },
+    ...((results || []).filter(r => r.language && r.language !== 'English').map(r => ({ label: `${r.language} Translation` }))),
+    ...(attachment ? [{ label: 'Annexures & Exhibits' }] : []),
+    { label: 'Closing Statement' },
   ];
-  let pageCounter = 4;
-  for (const r of results) {
-    if (r.language !== 'English') {
-      tocItems.push({ label: `${r.language} Translation`, page: pageCounter++ });
-    }
-  }
-  if (attachment) {
-    tocItems.push({ label: 'Annexures & Exhibits', page: pageCounter });
-  }
-  tocItems.push({ label: 'Closing Statement', page: pageCounter + (attachment ? 1 : 0) });
 
-  tocItems.forEach((item, idx) => {
-    const num = idx + 1;
-    const y = doc.y;
-    // Alternating row tint
-    if (idx % 2 === 0) {
-      doc.rect(50, y - 4, doc.page.width - 100, 22).fill('#f0f4f8').stroke();
-    }
-    doc.fillColor('#1a3a5c').font('Helvetica-Bold').fontSize(11)
-      .text(`${num}.`, 60, y, { continued: true, width: 20 });
-    doc.font('Helvetica').fillColor('#222222')
-      .text(`  ${item.label}`, { continued: true });
-    doc.fillColor('#666666')
-      .text(`Page ${item.page}`, { align: 'right', width: doc.page.width - 160 });
-    doc.moveDown(0.5);
+  const html = `
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    ${fontFaceCss}
+    @page { size: A4; margin: 18mm 16mm; }
+    body { font-family: sans-serif; color: #222; }
+    .page { page-break-after: always; }
+    .header { background: #1a3a5c; color: #fff; padding: 12px 14px; font-size: 18px; font-weight: 700; border-radius: 10px; }
+    .header.green { background: #2d6a4f; }
+    .header.annex { background: #5c3a1a; }
+    .badge { display:inline-block; margin-top:10px; padding:6px 10px; border-radius:999px; background:#eef3ff; color:#1a3a5c; font-weight:700; font-size:12px; }
+    .content { margin-top: 14px; font-size: 12px; line-height: 1.5; }
+    .muted { color: #666; }
+    .notice { margin: 10px 0 0; font-size: 10px; color: #555; text-align: center; letter-spacing: .08em; }
+    .footer { margin-top: 14px; font-size: 10px; color: #777; text-align: center; }
+    .toc { margin-top: 14px; border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden; }
+    .toc-row { display:flex; justify-content:space-between; padding: 10px 12px; font-size: 12px; }
+    .toc-row:nth-child(odd){ background:#f5f7fb; }
+    .letter { white-space: normal; }
+    .error { color: #b00020; font-weight: 600; margin-bottom: 8px; }
+    .annex-image-wrap { margin-top: 12px; display:flex; justify-content:center; }
+    .annex-image { max-width: 100%; max-height: 680px; object-fit: contain; border: 1px solid #eee; border-radius: 10px; }
+  </style>
+  <title>Petition ${escapeHtml(docketNo)}</title>
+</head>
+<body>
+  <div class="page">
+    <div class="header">JAN AWAAZ — जन आवाज़</div>
+    <div class="badge">Docket No: ${escapeHtml(docketNo)}</div>
+    <div class="content">
+      <p>This document contains the original petition and supporting materials submitted for grievance redressal.</p>
+      <p class="muted">Machine-generated translations are included for administrative convenience only.</p>
+      <p class="muted"><strong>Disclaimer:</strong> Translations are machine-generated. Accuracy is not guaranteed. Only the citizen’s original draft is legally binding.</p>
+    </div>
+  </div>
+
+  <div class="page">
+    <div class="header">Table of Contents</div>
+    <div class="content">
+      <div class="toc">
+        ${tocItems.map((it, idx) => `<div class="toc-row"><div>${idx + 1}. ${escapeHtml(it.label)}</div></div>`).join('')}
+      </div>
+      <div class="muted" style="margin-top:10px;">(Page numbers are omitted in this local build.)</div>
+    </div>
+  </div>
+
+  <div class="page">
+    <div class="header">Original Petition (English)</div>
+    <div class="content">
+      <div class="letter" style="font-family: Helvetica, Arial, sans-serif">${escapeHtml(englishLetter || '').replace(/\n/g, '<br/>')}</div>
+    </div>
+  </div>
+
+  ${translationsHtml}
+  ${attachmentHtml}
+
+  <div class="page">
+    <div class="header">Closing Statement</div>
+    <div class="content">
+      <p><strong>Petition Successfully Submitted</strong></p>
+      <p>Docket No: ${escapeHtml(docketNo)}</p>
+      <p class="muted">This is a system-generated document. No signature is required.</p>
+    </div>
+  </div>
+</body>
+</html>
+  `.trim();
+
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
 
-  // ── PAGE 3: ENGLISH ORIGINAL ──────────────────────────────────────────────
-  doc.addPage();
-  doc.addNamedDestination('P3');
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'load' });
+    const pdfBytes = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '18mm', right: '16mm', bottom: '18mm', left: '16mm' },
+    });
+    const pdfBuffer = Buffer.isBuffer(pdfBytes) ? pdfBytes : Buffer.from(pdfBytes);
 
-  doc.rect(0, 0, doc.page.width, 60).fill('#1a3a5c');
-  doc.fillColor('#ffffff').fontSize(16).font('Helvetica-Bold')
-    .text('Original Petition (English)', 50, 18, { align: 'center' });
-
-  doc.fillColor('#222222').moveDown(2);
-  doc.font('Helvetica').fontSize(10).lineGap(3)
-    .text(englishLetter, { align: 'justify' });
-
-  // ── TRANSLATION PAGES ─────────────────────────────────────────────────────
-  let translationPageNum = 4;
-  for (const result of results) {
-    if (result.language === 'English') continue;
-
-    doc.addPage();
-    const destKey = `P${translationPageNum++}`;
-    doc.addNamedDestination(destKey);
-
-    // Header
-    doc.rect(0, 0, doc.page.width, 60).fill('#2d6a4f');
-    doc.fillColor('#ffffff').fontSize(16).font('Helvetica-Bold')
-      .text(`${result.language} Translation`, 50, 18, { align: 'center' });
-
-    // Machine translation notice
-    doc.fillColor('#555555').fontSize(8).font('Helvetica')
-      .text('[ MACHINE GENERATED TRANSLATION — FOR REFERENCE ONLY ]', 50, 68, { align: 'center' });
-
-    if (result.error) {
-      doc.moveDown(2).fillColor('#cc0000').fontSize(10)
-        .text(`Translation unavailable: ${result.error}`);
-      doc.fillColor('#222222').moveDown()
-        .text('Please refer to the English original on Page 3.');
-    } else {
-      doc.fillColor('#222222').moveDown(2).fontSize(10).lineGap(3);
-      useFontForLanguage(result.language);
-      doc.text(result.letter || '', { align: 'justify' });
-    }
-
-    // Footer note
-    doc.font('Helvetica').fillColor('#888888').fontSize(8)
-      .text(
-        'Note: This is an automated translation. Refer to Page 3 for the legally binding English version.',
-        50, doc.page.height - 60,
-        { align: 'center', width: doc.page.width - 100 }
-      );
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=Petition_${docketNo}.pdf`);
+    res.send(pdfBuffer);
+  } finally {
+    await browser.close();
   }
+}
 
-  // ── ANNEXURES ─────────────────────────────────────────────────────────────
-  if (attachment) {
-    doc.addPage();
-    doc.addNamedDestination('PANNEX');
-
-    doc.rect(0, 0, doc.page.width, 60).fill('#5c3a1a');
-    doc.fillColor('#ffffff').fontSize(16).font('Helvetica-Bold')
-      .text('Annexures and Exhibits', 50, 18, { align: 'center' });
-
-    doc.fillColor('#222222').moveDown(2);
-    if (attachment.mimetype.startsWith('image/')) {
-      try {
-        doc.image(attachment.buffer, { fit: [500, 580], align: 'center', valign: 'center' });
-      } catch (err) {
-        doc.font('Helvetica').text('Error rendering attachment image.');
-      }
+async function safeGeneratePdf(res, pdfArgs) {
+  try {
+    await generatePDFBooklet(res, pdfArgs);
+  } catch (e) {
+    console.error('PDF generation error:', e && e.stack ? e.stack : e);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to generate PDF. ' + (e?.message || e) });
     } else {
-      doc.font('Helvetica').fontSize(10)
-        .text(`Attached file: ${attachment.originalname} (${attachment.mimetype})`);
-      doc.moveDown()
-        .text('Note: PDF/Document merging requires additional server-side processing.');
+      try { res.end(); } catch (_e) {}
     }
   }
-
-  // ── CLOSING PAGE ──────────────────────────────────────────────────────────
-  doc.addPage();
-
-  // Full-page background
-  doc.rect(0, 0, doc.page.width, doc.page.height).fill('#f7f9fc');
-
-  // Top accent bar
-  doc.rect(0, 0, doc.page.width, 8).fill('#1a3a5c');
-
-  // Central seal / emblem placeholder (circle)
-  const cx = doc.page.width / 2;
-  doc.circle(cx, 200, 60).lineWidth(3).strokeColor('#1a3a5c').fillColor('#ffffff').fillAndStroke();
-  doc.fillColor('#1a3a5c').fontSize(11).font('Helvetica-Bold')
-    .text('JAN AWAAZ', cx - 40, 185);
-  doc.fontSize(9).font('Helvetica')
-    .text('जन आवाज़', cx - 22, 200);
-
-  doc.fillColor('#1a3a5c').fontSize(20).font('Helvetica-Bold')
-    .text('Petition Successfully Submitted', 50, 290, { align: 'center' });
-
-  doc.moveDown(0.5).fillColor('#444444').fontSize(11).font('Helvetica')
-    .text(`Docket No: ${docketNo}`, { align: 'center' });
-
-  doc.moveDown(2).fontSize(10).fillColor('#555555')
-    .text(
-      'Your grievance has been formally recorded and will be reviewed by the concerned department. ' +
-      'You may quote the above Docket Number for all future correspondence and follow-ups.',
-      70, doc.y,
-      { align: 'center', width: doc.page.width - 140 }
-    );
-
-  doc.moveDown(2).fontSize(10).fillColor('#777777')
-    .text('This is a system-generated document. No signature is required.', { align: 'center' });
-
-  // Bottom accent bar
-  doc.rect(0, doc.page.height - 8, doc.page.width, 8).fill('#1a3a5c');
-
-  doc.end();
 }
 
 // ── Translation helpers ───────────────────────────────────────────────────────
@@ -473,7 +499,9 @@ app.post(
       });
 
       const randomId = Math.floor(1000 + Math.random() * 9000);
-      const docketNo = `JA-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${randomId}`;
+      const docketNo = (req.body.docketNo && String(req.body.docketNo).trim())
+        ? String(req.body.docketNo).trim()
+        : `JA-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${randomId}`;
 
       // Sanitize complaint text to strip mojibake / stray encoding artifacts
       const cleanComplaint = sanitizeText(complaint);
@@ -483,6 +511,59 @@ app.post(
         complaint: cleanComplaint,
         today,
       });
+
+      // If the frontend already generated preview letters, it can send them as `lettersJson`
+      // so we can collate/bind them into a PDF without re-calling the translation service.
+      let providedLetters = null;
+      if (typeof req.body.lettersJson === 'string' && req.body.lettersJson.trim()) {
+        try {
+          const parsed = JSON.parse(req.body.lettersJson);
+          if (Array.isArray(parsed)) {
+            providedLetters = parsed
+              .filter(x => x && typeof x === 'object')
+              .map(x => ({
+                language: String(x.language || '').trim(),
+                letter: typeof x.letter === 'string' ? x.letter : '',
+                error: x.error ? String(x.error) : undefined,
+              }))
+              .filter(x => x.language);
+          }
+        } catch (_e) {
+          providedLetters = null;
+        }
+      }
+
+      if (providedLetters && providedLetters.length > 0) {
+        const byLang = new Map();
+        for (const item of providedLetters) {
+          if (!byLang.has(item.language)) byLang.set(item.language, item);
+        }
+
+        const results = [];
+        for (const language of languages) {
+          const hit = byLang.get(language);
+          if (hit && typeof hit.letter === 'string' && hit.letter.trim()) {
+            results.push({ language, letter: hit.letter, error: hit.error });
+          } else if (language === 'English') {
+            results.push({ language, letter: englishLetter });
+          } else {
+            results.push({ language, letter: englishLetter, error: hit?.error || 'Missing cached letter; using English fallback' });
+          }
+        }
+
+        if (req.query.format === 'pdf') {
+          const englishFromProvided = byLang.get('English')?.letter;
+          await safeGeneratePdf(res, {
+            englishLetter: (typeof englishFromProvided === 'string' && englishFromProvided.trim()) ? englishFromProvided : englishLetter,
+            results,
+            docketNo,
+            attachment: req.file
+          });
+          return;
+        }
+
+        return res.json({ letters: results, docketNo, source: 'cached' });
+      }
 
       let supportedLanguages = [];
       try {
@@ -517,15 +598,18 @@ app.post(
       }
 
       if (req.query.format === 'pdf') {
-        return await generatePDFBooklet(res, {
-          englishLetter, results, docketNo, attachment: req.file
-        });
+        await safeGeneratePdf(res, { englishLetter, results, docketNo, attachment: req.file });
+        return;
       }
 
       res.json({ letters: results, docketNo });
     } catch (err) {
       console.error('Processing error:', err.message);
-      res.status(500).json({ error: 'Failed to generate or translate petition. ' + err.message });
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to generate or translate petition. ' + err.message });
+      } else {
+        try { res.end(); } catch (_e) {}
+      }
     }
   }
 );

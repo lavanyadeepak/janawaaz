@@ -597,6 +597,12 @@ async function generatePetition() {
 
   try {
     const data = await fetchAllLetters(state, dept, complaint, petitioner, languages);
+    // Cache the latest generated letters so PDF download doesn't need to call the service again
+    window.__lastGeneratedPetition = {
+      letters: data.letters || [],
+      docketNo: data.docketNo || null,
+      meta: { state, dept, complaint, petitioner, languages }
+    };
     data.letters.forEach(({ language, letter, error }) => {
       const i = languages.indexOf(language);
       if (i === -1) return;
@@ -647,11 +653,19 @@ function switchTab(idx) {
 
 async function downloadPDF(state, dept, complaint, petitioner, languages) {
   const formData = new FormData();
+  // Always send base fields (server can fall back if cached letters are missing)
   formData.append('state', state);
   formData.append('department', dept);
   formData.append('complaint', complaint);
   formData.append('petitioner', petitioner);
   languages.forEach(lang => formData.append('languages[]', lang));
+
+  // Prefer using the already-generated preview letters (avoids re-calling translation service)
+  const cached = window.__lastGeneratedPetition;
+  if (cached && Array.isArray(cached.letters) && cached.letters.length > 0) {
+    formData.append('lettersJson', JSON.stringify(cached.letters));
+    if (cached.docketNo) formData.append('docketNo', cached.docketNo);
+  }
   
   const fileInput = document.getElementById('attachment');
   if (fileInput.files.length > 0) formData.append('attachment', fileInput.files[0]);
@@ -661,16 +675,27 @@ async function downloadPDF(state, dept, complaint, petitioner, languages) {
     body: formData
   });
 
-  if (response.ok) {
-    const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `Petition_${new Date().getTime()}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    alert('PDF generation failed. ' + (errText || `HTTP ${response.status}`));
+    return;
   }
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.toLowerCase().includes('application/pdf')) {
+    const errText = await response.text().catch(() => '');
+    alert('Unexpected response while downloading PDF. ' + (errText || `Content-Type: ${contentType}`));
+    return;
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Petition_${new Date().getTime()}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 async function generateForLanguage(idx, language, state, dept, complaint, petitioner) {
