@@ -3,6 +3,7 @@ const express = require('express');
 const multer  = require('multer');
 const cors    = require('cors');
 const path    = require('path');
+const crypto = require('crypto');
 const fs = require('fs');
 const puppeteer = require('puppeteer');
 
@@ -32,6 +33,63 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function encryptIP(ip, key) {
+  // Normalize IP
+  const cleanIP = ip === '::1' ? '127.0.0.1' : ip.replace(/^::ffff:/, '');
+  
+  // Pad key to 32 bytes for AES-256
+  const keyBuffer = Buffer.alloc(32);
+  Buffer.from(key).copy(keyBuffer);
+  
+  // Fixed IV derived from key (deterministic — same IP+date = same token)
+  const iv = crypto.createHash('md5').update(key).digest(); // 16 bytes
+  
+  const cipher = crypto.createCipheriv('aes-256-cbc', keyBuffer, iv);
+  const encrypted = Buffer.concat([
+    cipher.update(Buffer.from(cleanIP)),
+    cipher.final()
+  ]);
+  
+  return encrypted.toString('hex').toUpperCase();
+}
+
+function decryptIP(token, key) {
+  const keyBuffer = Buffer.alloc(32);
+  Buffer.from(key).copy(keyBuffer);
+  
+  const iv = crypto.createHash('md5').update(key).digest();
+  
+  const decipher = crypto.createDecipheriv('aes-256-cbc', keyBuffer, iv);
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(token, 'hex')),
+    decipher.final()
+  ]);
+  
+  return decrypted.toString();
+}
+
+// ── In your route ─────────────────────────────────────────────────────────────
+function buildDocketNo(req) {
+  const raw = req.headers['x-forwarded-for']?.split(',')[0].trim()
+            || req.ip
+            || '127.0.0.1';
+  const ip = raw === '::1' ? '127.0.0.1' : raw.replace(/^::ffff:/, '');
+
+  const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, ''); // e.g. 20260516
+  const token    = encryptIP(ip, datePart); // e.g. A3F9C12D...
+
+  return { docketNo: `JA-${datePart}-${token}`, ip, datePart };
+}
+
+// ── To investigate any docket later ──────────────────────────────────────────
+function resolveIPFromDocket(docketNo) {
+  // e.g. "JA-20260516-A3F9C12D..."
+  const parts    = docketNo.split('-');
+  const datePart = parts[1];  // 20260516
+  const token    = parts[2];  // encrypted hex
+  return decryptIP(token, datePart);
 }
 
 async function parseTranslationResponse(response) {
@@ -390,14 +448,70 @@ async function generatePDFBooklet(res, { englishLetter, results, docketNo, attac
 
   <div class="page">
     <div class="header">Closing Statement</div>
-    <div class="content">
-      <p><strong>Petition Successfully Submitted</strong></p>
-      <p>Docket No: ${escapeHtml(docketNo)}</p>
-      <p class="muted">This is a system-generated document. No signature is required.</p>
-    </div>
+<div class="content">
+  <div class="seal-ring">
+    <span class="seal-en">JAN AWAAZ</span>
+    <span class="seal-hi">जन आवाज़</span>
+  </div>
+
+  <p class="closing-title">Petition Formally Recorded</p>
+  <p class="closing-docket">Docket No: ${escapeHtml(docketNo)}</p>
+
+  <p class="closing-note">
+    This petition was prepared and submitted through the
+    <strong>JanAwaaz Citizen Grievance Portal</strong> —
+    a free, open platform empowering every Indian citizen
+    to file grievances in their own language.
+  </p>
+
+  <p class="closing-note" style="margin-top:10px">
+    Built with the belief that <em>language should never be a barrier to justice.</em>
+  </p>
+
+  <div class="closing-divider"></div>
+
+  <p class="closing-meta">🌐 Jan Awaaz &nbsp;|&nbsp; जन आवाज़ &nbsp;|&nbsp; Your Voice. Your Rights. In Your Language.</p>
+  <p class="muted">Docket No: ${escapeHtml(docketNo)} &nbsp;·&nbsp; System-generated · No signature required.</p>
+</div>
   </div>
 </body>
 </html>
+.closing-title {
+  font-size: 20px;
+  font-weight: bold;
+  color: #1a3a5c;
+  margin-bottom: 10px;
+}
+.closing-docket {
+  font-size: 12px;
+  color: #444;
+  margin-bottom: 24px;
+}
+.closing-note {
+  font-size: 11px;
+  color: #555;
+  max-width: 400px;
+  line-height: 1.8;
+  text-align: center;
+}
+.closing-divider {
+  width: 60px;
+  height: 2px;
+  background: #1a3a5c;
+  margin: 24px auto;
+  border-radius: 2px;
+}
+.closing-meta {
+  font-size: 11px;
+  font-weight: 600;
+  color: #1a3a5c;
+  letter-spacing: 0.3px;
+  margin-bottom: 8px;
+}
+.muted {
+  font-size: 9px;
+  color: #aaa;
+}
   `.trim();
 
   const browser = await puppeteer.launch({
@@ -434,6 +548,20 @@ async function safeGeneratePdf(res, pdfArgs) {
       try { res.end(); } catch (_e) {}
     }
   }
+}
+
+function ipToNumber(ip) {
+  const parts = ip.split('.').map(Number);
+  return (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
+}
+
+function numberToIp(num) {
+  return [
+    (num >> 24) & 255,
+    (num >> 16) & 255,
+    (num >> 8) & 255,
+    num & 255
+  ].join('.');
 }
 
 // ── Translation helpers ───────────────────────────────────────────────────────
@@ -498,11 +626,10 @@ app.post(
         day: 'numeric', month: 'long', year: 'numeric',
       });
 
-      const randomId = Math.floor(1000 + Math.random() * 9000);
-      const docketNo = (req.body.docketNo && String(req.body.docketNo).trim())
-        ? String(req.body.docketNo).trim()
-        : `JA-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${randomId}`;
-
+const { docketNo } = (req.body.docketNo && String(req.body.docketNo).trim())
+  ? { docketNo: String(req.body.docketNo).trim() }
+  : buildDocketNo(req);
+  
       // Sanitize complaint text to strip mojibake / stray encoding artifacts
       const cleanComplaint = sanitizeText(complaint);
 
