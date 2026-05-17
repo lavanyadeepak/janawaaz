@@ -6,6 +6,7 @@ const path    = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
 const puppeteer = require('puppeteer');
+const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 
 const app    = express();
 const upload = multer({ limits: { fileSize: 5 * 1024 * 1024 } }); // 5 MB
@@ -346,12 +347,13 @@ async function generatePDFBooklet(res, { englishLetter, results, docketNo, attac
         </div>
       `;
     } else {
+      const isPdf = attachment.mimetype === 'application/pdf';
       attachmentHtml = `
         <div class="page">
           <div class="header annex">Annexures and Exhibits</div>
           <div class="content">
             <div class="muted">Attached file: ${escapeHtml(attachment.originalname || '')} (${escapeHtml(attachment.mimetype || 'unknown')})</div>
-            <div class="muted">Note: PDF merging is not enabled in this local build.</div>
+            ${isPdf ? `<div class="muted">Uploaded PDF pages are appended as annexure pages.</div>` : ``}
           </div>
         </div>
       `;
@@ -432,7 +434,6 @@ async function generatePDFBooklet(res, { englishLetter, results, docketNo, attac
       <div class="toc">
         ${tocItems.map((it, idx) => `<div class="toc-row"><div>${idx + 1}. ${escapeHtml(it.label)}</div></div>`).join('')}
       </div>
-      <div class="muted" style="margin-top:10px;">(Page numbers are omitted in this local build.)</div>
     </div>
   </div>
 
@@ -521,13 +522,75 @@ async function generatePDFBooklet(res, { englishLetter, results, docketNo, attac
 
   try {
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'load' });
+    await page.setContent(html, { waitUntil: 'domcontentloaded' });
+    try { await page.evaluate(() => (document.fonts && document.fonts.ready) ? document.fonts.ready : true); } catch (_e) {}
     const pdfBytes = await page.pdf({
       format: 'A4',
       printBackground: true,
-      margin: { top: '18mm', right: '16mm', bottom: '18mm', left: '16mm' },
+      // Keep this PDF "clean" (no baked-in page numbers), then add numbering after optional PDF merging.
+      displayHeaderFooter: false,
+      margin: { top: '18mm', right: '16mm', bottom: '22mm', left: '16mm' },
     });
-    const pdfBuffer = Buffer.isBuffer(pdfBytes) ? pdfBytes : Buffer.from(pdfBytes);
+    const basePdfBuffer = Buffer.isBuffer(pdfBytes) ? pdfBytes : Buffer.from(pdfBytes);
+
+    // If the user uploaded a PDF, merge its pages *before* the final closing page.
+    // Then stamp consistent page numbers across the whole merged document.
+    const shouldMergePdf =
+      attachment &&
+      attachment.mimetype === 'application/pdf' &&
+      attachment.buffer &&
+      attachment.buffer.length > 0;
+
+    let finalPdfBytes;
+    if (shouldMergePdf) {
+      const baseDoc = await PDFDocument.load(basePdfBuffer);
+      const annexDoc = await PDFDocument.load(attachment.buffer);
+      const merged = await PDFDocument.create();
+
+      const basePageCount = baseDoc.getPageCount();
+      const closingIndex = Math.max(0, basePageCount - 1);
+
+      const preClosingIdx = Array.from({ length: closingIndex }, (_v, i) => i);
+      const preClosingPages = await merged.copyPages(baseDoc, preClosingIdx);
+      preClosingPages.forEach((p) => merged.addPage(p));
+
+      const annexIdx = Array.from({ length: annexDoc.getPageCount() }, (_v, i) => i);
+      const annexPages = await merged.copyPages(annexDoc, annexIdx);
+      annexPages.forEach((p) => merged.addPage(p));
+
+      const closingPages = await merged.copyPages(baseDoc, [closingIndex]);
+      if (closingPages[0]) merged.addPage(closingPages[0]);
+
+      finalPdfBytes = await merged.save();
+    } else {
+      finalPdfBytes = basePdfBuffer;
+    }
+
+    // Stamp footer page numbers after merging so totals stay correct.
+    const numberedDoc = await PDFDocument.load(finalPdfBytes);
+    const font = await numberedDoc.embedFont(StandardFonts.Helvetica);
+    const pages = numberedDoc.getPages();
+    const total = pages.length;
+    const fontSize = 9;
+    const color = rgb(0.45, 0.45, 0.45);
+    const leftMargin = 40;
+    const bottom = 16;
+
+    for (let i = 0; i < pages.length; i++) {
+      const p = pages[i];
+      const w = p.getWidth();
+      const docketText = String(docketNo || '');
+      const pageText = `${i + 1} / ${total}`;
+
+      if (docketText) {
+        p.drawText(docketText, { x: leftMargin, y: bottom, size: fontSize, font, color });
+      }
+
+      const pageTextWidth = font.widthOfTextAtSize(pageText, fontSize);
+      p.drawText(pageText, { x: Math.max(leftMargin, w - leftMargin - pageTextWidth), y: bottom, size: fontSize, font, color });
+    }
+
+    const pdfBuffer = Buffer.from(await numberedDoc.save());
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=Petition_${docketNo}.pdf`);
